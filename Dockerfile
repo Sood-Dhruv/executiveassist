@@ -15,7 +15,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY my_env.py .
 COPY tasks.py .
 COPY graders.py .
-COPY server.py .
+COPY server ./server
 COPY openenv.yaml .
 
 # Expose port (Hugging Face Spaces uses 7860)

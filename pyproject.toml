@@ -6,8 +6,9 @@ authors = [{name = "Dhruv"}]
 dependencies = [
     "openai",
     "fastapi",
-    "uvicorn"
+    "uvicorn",
+    "openenv-core>=0.2.0"
 ]
 
-[tool.setuptools]
-py-modules = []
+[project.scripts]
+server = "server.app:main"
