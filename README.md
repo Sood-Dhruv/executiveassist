@@ -1,3 +1,11 @@
+---
+title: Executive Assist
+emoji: 🤖
+colorFrom: blue
+colorTo: purple
+sdk: docker
+app_port: 7860
+---
 # ExecutiveAssist-Env
 
 **An OpenEnv environment where an AI agent acts as a personal executive assistant.**
