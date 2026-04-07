@@ -1,0 +1,13 @@
+[project]
+name = "executiveassist"
+version = "0.1.0"
+description = "Executive Assistant AI Agent"
+authors = [{name = "Dhruv"}]
+dependencies = [
+    "openai",
+    "fastapi",
+    "uvicorn"
+]
+
+[tool.setuptools]
+py-modules = []
