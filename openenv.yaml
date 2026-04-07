@@ -1,0 +1,82 @@
+name: executiveassist-env
+version: "1.0.0"
+description: >
+  An OpenEnv environment simulating an AI Executive Assistant (AI Secretary).
+  The agent handles real-world tasks including scheduling meetings, triaging emails,
+  extracting action items from meeting notes, resolving calendar conflicts, and
+  building optimized full-day plans for a busy executive.
+
+domain: productivity
+type: text-based
+real_world: true
+
+tasks:
+  - id: schedule_meeting
+    difficulty: easy
+    description: "Find the first mutually available 1-hour slot for a 3-person meeting"
+  - id: confirm_slot
+    difficulty: easy
+    description: "Pick the conflict-free slot from 3 proposed options"
+  - id: cancel_meeting
+    difficulty: easy
+    description: "Cancel a meeting and send an apology note to attendees"
+  - id: inbox_triage
+    difficulty: medium
+    description: "Triage 8 emails into URGENT / IMPORTANT / DELEGATE / ARCHIVE"
+  - id: reschedule_conflict
+    difficulty: medium
+    description: "Resolve a calendar conflict by rescheduling the lower-priority meeting"
+  - id: draft_reply
+    difficulty: medium
+    description: "Draft a professional empathetic reply to an angry client email"
+  - id: multi_party_schedule
+    difficulty: hard
+    description: "Find a 90-min meeting slot across 5 people in 4 different time zones"
+  - id: meeting_notes_extraction
+    difficulty: hard
+    description: "Extract action items, decisions, and open questions from a meeting transcript"
+  - id: full_day_plan
+    difficulty: hard
+    description: "Build an optimized conflict-free full-day schedule from a chaotic task list"
+
+interface:
+  reset:
+    method: POST
+    path: /reset
+    body:
+      task_id: "optional string — task to load"
+      seed: "optional int — for reproducibility"
+    returns: "initial state dict"
+
+  step:
+    method: POST
+    path: /step
+    body:
+      action: "dict with at minimum {type: string}"
+    returns:
+      state: "current environment state"
+      reward: "float in [0.0, 1.0]"
+      done: "boolean"
+      info: "dict with metadata"
+
+  state:
+    method: GET
+    path: /state
+    returns: "current state without advancing"
+
+reward:
+  range: [0.0, 1.0]
+  partial_credit: true
+  done_threshold: 0.70
+  grading: rubric-based
+
+evaluation:
+  success_threshold: 0.70
+  max_steps_per_episode: 10
+
+server:
+  port: 7860
+  framework: fastapi
+
+author: "ExecutiveAssist Team"
+license: MIT
