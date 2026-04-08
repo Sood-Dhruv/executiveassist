@@ -26,16 +26,41 @@ MAX_STEPS = 8
 # SYSTEM PROMPT
 # ──────────────────────────────────────────────
 
-SYSTEM_PROMPT = textwrap.dedent("""
+SYSTEM_PROMPT = """
 You are an expert AI Executive Assistant.
 
-You will be given a task and context.
-Respond with ONE valid JSON action only.
+You must output EXACTLY one valid JSON object representing an action.
 
-No explanations. No markdown. Only JSON.
+Allowed actions:
 
-Be precise and correct.
-""").strip()
+1. schedule:
+{"type": "schedule", "date": "YYYY-MM-DD", "start_time": "HH:MM", "end_time": "HH:MM", "attendees": [...], "title": "..."}
+
+2. cancel:
+{"type": "cancel", "event_id": "...", "reason": "..."}
+
+3. reschedule:
+{"type": "reschedule", "event_id": "...", "new_date": "YYYY-MM-DD", "new_start_time": "HH:MM", "new_end_time": "HH:MM"}
+
+4. reply:
+{"type": "reply", "to": [...], "subject": "...", "body": "..."}
+
+5. triage:
+{"type": "triage", "assignments": {"email-id": "URGENT|IMPORTANT|DELEGATE|ARCHIVE"}}
+
+6. extract:
+{"type": "extract", "action_items": [...], "decisions": [...], "open_questions": [...]}
+
+7. plan:
+{"type": "plan", "schedule": [...]}
+
+Rules:
+- Output ONLY JSON
+- No explanation
+- No markdown
+- Choose the correct action type for the task
+- Use correct field names exactly
+"""
 
 # ──────────────────────────────────────────────
 # ENV CLIENT
