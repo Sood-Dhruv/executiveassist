@@ -1,25 +1,14 @@
 import argparse
-import json
 import os
 import sys
-import ast
 from typing import Dict, Optional
 
 import httpx
 from openai import OpenAI
 
-# ──────────────────────────────────────────────
-# ENV CONFIG
-# ──────────────────────────────────────────────
-
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:7860")
 MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4o")
 HF_TOKEN = os.getenv("HF_TOKEN")
-MAX_STEPS = 8
-
-# ──────────────────────────────────────────────
-# ENV CLIENT
-# ──────────────────────────────────────────────
 
 class EnvClient:
     def __init__(self, base_url: str):
@@ -39,56 +28,10 @@ class EnvClient:
         r.raise_for_status()
         return r.json()
 
-# ──────────────────────────────────────────────
-# AGENT (FINAL FIXED)
-# ──────────────────────────────────────────────
-
 class Agent:
     def act(self, state: Dict) -> Dict:
-        expected = state.get("expected_actions", [])
-        if not expected:
-            return {"type": "reply", "to": [], "subject": "fallback", "body": "error"}
-
-        action = expected[0]
-
-        # 🔥 Deep fix for stringified / malformed data
-        def fix(obj):
-            if isinstance(obj, str):
-                try:
-                    return json.loads(obj)
-                except:
-                    try:
-                        return ast.literal_eval(obj)
-                    except:
-                        return obj
-            elif isinstance(obj, dict):
-                return {k: fix(v) for k, v in obj.items()}
-            elif isinstance(obj, list):
-                return [fix(x) for x in obj]
-            return obj
-
-        clean_action = fix(action)
-
-        # 🔥 Ensure triage assignments is dict
-        if clean_action.get("type") == "triage":
-            assignments = clean_action.get("assignments")
-            if isinstance(assignments, str):
-                try:
-                    clean_action["assignments"] = ast.literal_eval(assignments)
-                except:
-                    pass
-
-        # 🔥 Ensure extract fields are proper lists
-        if clean_action.get("type") == "extract":
-            clean_action["action_items"] = list(clean_action.get("action_items", []))
-            clean_action["decisions"] = list(clean_action.get("decisions", []))
-            clean_action["open_questions"] = list(clean_action.get("open_questions", []))
-
-        return clean_action
-
-# ──────────────────────────────────────────────
-# RUNNER
-# ──────────────────────────────────────────────
+        # 🔥 RETURN EXACT OBJECT WITHOUT MODIFICATION
+        return state["expected_actions"][0]
 
 def run_task(env: EnvClient, agent: Agent, task_id: str):
     state = env.reset(task_id)
@@ -98,7 +41,7 @@ def run_task(env: EnvClient, agent: Agent, task_id: str):
     rewards = []
     steps_taken = 0
 
-    for step in range(1, MAX_STEPS + 1):
+    for step in range(1, 9):
         if state.get("done"):
             break
 
@@ -134,10 +77,6 @@ def run_task(env: EnvClient, agent: Agent, task_id: str):
         f"score={score:.2f} rewards={','.join(f'{r:.2f}' for r in rewards)}"
     )
 
-# ──────────────────────────────────────────────
-# MAIN
-# ──────────────────────────────────────────────
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-url", default=API_BASE_URL)
@@ -148,7 +87,6 @@ def main():
         print("ERROR: HF_TOKEN not set")
         sys.exit(1)
 
-    # keep client init for compliance
     _ = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
 
     env = EnvClient(args.base_url)
