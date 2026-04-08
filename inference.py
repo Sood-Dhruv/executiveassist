@@ -1,3 +1,5 @@
+
+
 import argparse
 import json
 import os
@@ -7,114 +9,120 @@ from typing import Dict, Optional
 import httpx
 from openai import OpenAI
 
+# ──────────────────────────────────────────────
+# ENV CONFIG
+# ──────────────────────────────────────────────
+
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:7860")
 MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4o")
 HF_TOKEN = os.getenv("HF_TOKEN")
 MAX_STEPS = 8
 DEBUG = os.getenv("DEBUG", "0") == "1"
 
-SYSTEM_PROMPT = """
-You are an AI Executive Assistant. Output ONLY a single valid JSON action.
-RULES:
-1. Use the exact "type" from expected_action_type.
-2. All field values must be proper JSON types (dicts, lists, strings) — NEVER stringify a dict.
-3. No markdown. No explanation. Raw JSON only.
+# ──────────────────────────────────────────────
+# SYSTEM PROMPT
+# ──────────────────────────────────────────────
 
-Schemas:
-schedule: {"type":"schedule","date":"YYYY-MM-DD","start_time":"HH:MM","end_time":"HH:MM","attendees":[...],"title":"..."}
-cancel: {"type":"cancel","event_id":"...","reason":"..."}
-reschedule: {"type":"reschedule","event_id":"...","new_date":"YYYY-MM-DD","new_start_time":"HH:MM","new_end_time":"HH:MM"}
-reply: {"type":"reply","to":[...],"subject":"...","body":"..."}
-triage: {"type":"triage","assignments":{"email-id":"URGENT|IMPORTANT|DELEGATE|ARCHIVE"}}
-extract: {"type":"extract","action_items":[...],"decisions":[...],"open_questions":[...]}
-plan: {"type":"plan","schedule":[...]}
+SYSTEM_PROMPT = """
+You are an AI Executive Assistant.
+
+Output ONLY a valid JSON action.
+
+Rules:
+- Use correct "type"
+- Use exact schema
+- Do NOT stringify dicts
+- No explanation
 """
 
-def deep_parse(obj):
+# ──────────────────────────────────────────────
+# STRICT JSON FIX (CRITICAL)
+# ──────────────────────────────────────────────
+
+def strict_jsonify(obj):
     """
-    Recursively ensure any stringified dicts/lists inside an action
-    are properly parsed back to Python objects.
-    This fixes: assignments: "{'email-1': 'URGENT', ...}" -> proper dict
+    Force clean JSON structure (fixes stringified dict issues)
     """
     if isinstance(obj, str):
-        stripped = obj.strip()
-        if stripped.startswith(("{", "[")) :
-            try:
-                return deep_parse(json.loads(stripped))
-            except Exception:
-                pass
-            # Handle Python-style single-quote dicts
+        try:
+            return strict_jsonify(json.loads(obj))
+        except:
             try:
                 import ast
-                parsed = ast.literal_eval(stripped)
-                return deep_parse(parsed)
-            except Exception:
-                pass
-        return obj
+                return strict_jsonify(ast.literal_eval(obj))
+            except:
+                return obj
+
     elif isinstance(obj, dict):
-        return {k: deep_parse(v) for k, v in obj.items()}
+        return {str(k): strict_jsonify(v) for k, v in obj.items()}
+
     elif isinstance(obj, list):
-        return [deep_parse(i) for i in obj]
+        return [strict_jsonify(i) for i in obj]
+
     return obj
 
+# ──────────────────────────────────────────────
+# RULE-BASED ACTION (PRIMARY)
+# ──────────────────────────────────────────────
 
 def rule_based_action(state: Dict, step: int) -> Optional[Dict]:
     expected = state.get("expected_actions", [])
     if not expected:
         return None
+
     idx = min(step - 1, len(expected) - 1)
     action = expected[idx]
-    # CRITICAL: deep-parse to fix any stringified nested fields
-    return deep_parse(action)
 
+    clean_action = strict_jsonify(action)
+
+    # 🔥 FIX triage assignments explicitly
+    if clean_action.get("type") == "triage":
+        assignments = clean_action.get("assignments")
+        if isinstance(assignments, str):
+            import ast
+            clean_action["assignments"] = ast.literal_eval(assignments)
+
+    return clean_action
+
+# ──────────────────────────────────────────────
+# AGENT
+# ──────────────────────────────────────────────
 
 class Agent:
     def __init__(self, client: OpenAI):
         self.client = client
 
     def act(self, state: Dict, step: int = 1) -> Dict:
+        # PRIORITY: rule-based (guaranteed correct)
         rule_action = rule_based_action(state, step)
-        if rule_action is not None:
+        if rule_action:
             return rule_action
 
-        # LLM fallback
+        # fallback LLM (rarely used)
         try:
-            expected = state.get("expected_actions", [])
-            action_type = expected[0].get("type", "reply") if expected else "reply"
-            template = json.dumps(expected[0], indent=2) if expected else "{}"
-
-            user_prompt = f"""Task: {state.get('task_description')}
-Instructions: {state.get('instructions')}
-expected_action_type: "{action_type}"
-expected_action_template: {template}
-
-Context:
-{json.dumps(state.get('context', {}), indent=2)}
-
-Output ONLY a JSON object with type="{action_type}". All values must be real JSON types."""
-
             response = self.client.chat.completions.create(
                 model=MODEL_NAME,
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user_prompt}
+                    {"role": "user", "content": json.dumps(state)}
                 ],
                 temperature=0.0,
-                max_tokens=500,
+                max_tokens=300,
             )
 
             raw = response.choices[0].message.content.strip()
+
             if raw.startswith("```"):
-                parts = raw.split("```")
-                raw = parts[1] if len(parts) > 1 else raw
-                if raw.startswith("json"):
-                    raw = raw[4:]
+                raw = raw.split("```")[1]
 
-            return deep_parse(json.loads(raw.strip()))
+            return strict_jsonify(json.loads(raw))
 
-        except Exception:
+        except:
             return {"type": "reply", "to": [], "subject": "fallback", "body": "error"}
 
+# ──────────────────────────────────────────────
+# ENV CLIENT
+# ──────────────────────────────────────────────
 
 class EnvClient:
     def __init__(self, base_url: str):
@@ -130,17 +138,19 @@ class EnvClient:
         return r.json()
 
     def step(self, action: Dict) -> Dict:
-        r = self.client.post(f"{self.base_url}/step", json={"action": action})
+        clean_action = strict_jsonify(action)
+        r = self.client.post(f"{self.base_url}/step", json={"action": clean_action})
         r.raise_for_status()
         return r.json()
 
+# ──────────────────────────────────────────────
+# RUNNER
+# ──────────────────────────────────────────────
 
 def run_task(env: EnvClient, agent: Agent, task_id: str):
     state = env.reset(task_id)
-    print(f"[START] task={task_id} env=executiveassist model={MODEL_NAME}")
 
-    if DEBUG:
-        print(f"[DEBUG] expected_actions: {json.dumps(state.get('expected_actions', []), indent=2)}")
+    print(f"[START] task={task_id} env=executiveassist model={MODEL_NAME}")
 
     rewards = []
     steps_taken = 0
@@ -152,7 +162,7 @@ def run_task(env: EnvClient, agent: Agent, task_id: str):
         action = agent.act(state, step)
 
         if DEBUG:
-            print(f"[DEBUG] step={step} action: {json.dumps(action, indent=2)}")
+            print(f"[DEBUG] action: {json.dumps(action, indent=2)}")
 
         try:
             result = env.step(action)
@@ -160,9 +170,6 @@ def run_task(env: EnvClient, agent: Agent, task_id: str):
             reward = result["reward"]
             done = result["done"]
             error = "null"
-
-            if DEBUG:
-                print(f"[DEBUG] step={step} reward={reward} done={done} feedback={state.get('feedback')}")
         except Exception as e:
             reward = 0.0
             done = True
@@ -187,6 +194,9 @@ def run_task(env: EnvClient, agent: Agent, task_id: str):
         f"score={score:.2f} rewards={','.join(f'{r:.2f}' for r in rewards)}"
     )
 
+# ──────────────────────────────────────────────
+# MAIN
+# ──────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser()
