@@ -73,7 +73,13 @@ class Agent:
                 model=MODEL_NAME,
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": json.dumps(state)}
+                    {"role": "user", "content": f"""
+                        Task: {state.get('task_description')}
+                        Instructions: {state.get('instructions')}
+                        Context:
+                        {json.dumps(state.get('context', {}), indent=2)}
+                        Return ONLY valid JSON action.
+                    """}
                 ],
                 temperature=0.0,
                 max_tokens=500,
