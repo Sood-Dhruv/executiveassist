@@ -116,9 +116,10 @@ def step(req: StepRequest):
         raise HTTPException(status_code=422, detail="Missing 'type' in action.")
 
     # sanitize inputs
+    # sanitize only strings, keep dicts/lists intact
     for key in action:
-        if action[key] is not None:
-            action[key] = str(action[key]).strip()
+        if isinstance(action[key], str):
+            action[key] = action[key].strip()
 
     try:
         state, reward, done, info = env.step(action)
