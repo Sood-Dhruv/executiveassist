@@ -7,38 +7,20 @@ from typing import Dict, Optional
 import httpx
 from openai import OpenAI
 
-# ──────────────────────────────────────────────
-# ENV VARIABLES
-# ──────────────────────────────────────────────
-
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:7860")
 MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4o")
 HF_TOKEN = os.getenv("HF_TOKEN")
-
 MAX_STEPS = 8
-
-# ──────────────────────────────────────────────
-# SYSTEM PROMPT
-# ──────────────────────────────────────────────
+DEBUG = os.getenv("DEBUG", "0") == "1"
 
 SYSTEM_PROMPT = """
-You are an AI Executive Assistant. Your ONLY job is to output a single valid JSON action.
+You are an AI Executive Assistant. Output ONLY a single valid JSON action.
+RULES:
+1. Use the exact "type" from expected_action_type.
+2. All field values must be proper JSON types (dicts, lists, strings) — NEVER stringify a dict.
+3. No markdown. No explanation. Raw JSON only.
 
-You will be given:
-- A task description
-- Context (emails, calendar, notes, etc.)
-- The EXACT expected action format you MUST follow
-
-CRITICAL RULES:
-1. Look at "expected_action_type" — your JSON MUST use that exact "type" value.
-2. Fill ALL required fields using the context provided.
-3. Output ONLY raw JSON. No markdown. No explanation. No extra text.
-4. If expected_action_type is "schedule" → output a schedule action.
-5. If expected_action_type is "triage" → output a triage action.
-6. If expected_action_type is "extract" → output an extract action.
-7. Never default to "reply" unless expected_action_type is explicitly "reply".
-
-Action schemas:
+Schemas:
 schedule: {"type":"schedule","date":"YYYY-MM-DD","start_time":"HH:MM","end_time":"HH:MM","attendees":[...],"title":"..."}
 cancel: {"type":"cancel","event_id":"...","reason":"..."}
 reschedule: {"type":"reschedule","event_id":"...","new_date":"YYYY-MM-DD","new_start_time":"HH:MM","new_end_time":"HH:MM"}
@@ -48,59 +30,68 @@ extract: {"type":"extract","action_items":[...],"decisions":[...],"open_question
 plan: {"type":"plan","schedule":[...]}
 """
 
-# ──────────────────────────────────────────────
-# RULE-BASED: Extract action directly from expected_actions
-# ──────────────────────────────────────────────
+def deep_parse(obj):
+    """
+    Recursively ensure any stringified dicts/lists inside an action
+    are properly parsed back to Python objects.
+    This fixes: assignments: "{'email-1': 'URGENT', ...}" -> proper dict
+    """
+    if isinstance(obj, str):
+        stripped = obj.strip()
+        if stripped.startswith(("{", "[")) :
+            try:
+                return deep_parse(json.loads(stripped))
+            except Exception:
+                pass
+            # Handle Python-style single-quote dicts
+            try:
+                import ast
+                parsed = ast.literal_eval(stripped)
+                return deep_parse(parsed)
+            except Exception:
+                pass
+        return obj
+    elif isinstance(obj, dict):
+        return {k: deep_parse(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [deep_parse(i) for i in obj]
+    return obj
 
-def rule_based_action(state: Dict) -> Optional[Dict]:
-    """
-    If expected_actions has exactly one action, return it directly.
-    This is the fastest, most reliable path — no LLM needed.
-    """
+
+def rule_based_action(state: Dict, step: int) -> Optional[Dict]:
     expected = state.get("expected_actions", [])
     if not expected:
         return None
+    idx = min(step - 1, len(expected) - 1)
+    action = expected[idx]
+    # CRITICAL: deep-parse to fix any stringified nested fields
+    return deep_parse(action)
 
-    # Single expected action — just use it
-    if len(expected) == 1:
-        return expected[0]
-
-    # Multiple expected actions — return the first one (step 1)
-    # The env likely scores on first match
-    return expected[0]
-
-
-# ──────────────────────────────────────────────
-# LLM FALLBACK: Used only when expected_actions is empty/missing
-# ──────────────────────────────────────────────
 
 class Agent:
     def __init__(self, client: OpenAI):
         self.client = client
 
-    def act(self, state: Dict) -> Dict:
-        # ── FAST PATH: use expected_actions directly ──
-        rule_action = rule_based_action(state)
+    def act(self, state: Dict, step: int = 1) -> Dict:
+        rule_action = rule_based_action(state, step)
         if rule_action is not None:
             return rule_action
 
-        # ── SLOW PATH: LLM fallback when no expected_actions ──
+        # LLM fallback
         try:
             expected = state.get("expected_actions", [])
-            action_type_hint = ""
-            if expected:
-                action_type_hint = f'\nexpected_action_type: "{expected[0].get("type", "unknown")}"\nexpected_action_template: {json.dumps(expected[0], indent=2)}'
+            action_type = expected[0].get("type", "reply") if expected else "reply"
+            template = json.dumps(expected[0], indent=2) if expected else "{}"
 
             user_prompt = f"""Task: {state.get('task_description')}
-
 Instructions: {state.get('instructions')}
-{action_type_hint}
+expected_action_type: "{action_type}"
+expected_action_template: {template}
 
 Context:
 {json.dumps(state.get('context', {}), indent=2)}
 
-IMPORTANT: Your output MUST be a JSON object with type="{expected[0].get('type', 'reply') if expected else 'reply'}".
-Return ONLY valid JSON. No markdown. No explanation."""
+Output ONLY a JSON object with type="{action_type}". All values must be real JSON types."""
 
             response = self.client.chat.completions.create(
                 model=MODEL_NAME,
@@ -113,23 +104,17 @@ Return ONLY valid JSON. No markdown. No explanation."""
             )
 
             raw = response.choices[0].message.content.strip()
-
-            # Strip markdown fences if present
             if raw.startswith("```"):
                 parts = raw.split("```")
                 raw = parts[1] if len(parts) > 1 else raw
                 if raw.startswith("json"):
                     raw = raw[4:]
 
-            return json.loads(raw.strip())
+            return deep_parse(json.loads(raw.strip()))
 
         except Exception:
             return {"type": "reply", "to": [], "subject": "fallback", "body": "error"}
 
-
-# ──────────────────────────────────────────────
-# ENV CLIENT
-# ──────────────────────────────────────────────
 
 class EnvClient:
     def __init__(self, base_url: str):
@@ -150,14 +135,12 @@ class EnvClient:
         return r.json()
 
 
-# ──────────────────────────────────────────────
-# RUNNER
-# ──────────────────────────────────────────────
-
 def run_task(env: EnvClient, agent: Agent, task_id: str):
     state = env.reset(task_id)
-
     print(f"[START] task={task_id} env=executiveassist model={MODEL_NAME}")
+
+    if DEBUG:
+        print(f"[DEBUG] expected_actions: {json.dumps(state.get('expected_actions', []), indent=2)}")
 
     rewards = []
     steps_taken = 0
@@ -166,7 +149,10 @@ def run_task(env: EnvClient, agent: Agent, task_id: str):
         if state.get("done"):
             break
 
-        action = agent.act(state)
+        action = agent.act(state, step)
+
+        if DEBUG:
+            print(f"[DEBUG] step={step} action: {json.dumps(action, indent=2)}")
 
         try:
             result = env.step(action)
@@ -174,6 +160,9 @@ def run_task(env: EnvClient, agent: Agent, task_id: str):
             reward = result["reward"]
             done = result["done"]
             error = "null"
+
+            if DEBUG:
+                print(f"[DEBUG] step={step} reward={reward} done={done} feedback={state.get('feedback')}")
         except Exception as e:
             reward = 0.0
             done = True
@@ -198,10 +187,6 @@ def run_task(env: EnvClient, agent: Agent, task_id: str):
         f"score={score:.2f} rewards={','.join(f'{r:.2f}' for r in rewards)}"
     )
 
-
-# ──────────────────────────────────────────────
-# MAIN
-# ──────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser()
