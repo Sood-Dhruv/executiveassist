@@ -344,10 +344,13 @@ TASKS: Dict[str, Any] = {
         ),
         "difficulty": "hard",
         "instructions": (
-            "Review each attendee's calendar and timezone. Find a 90-minute window "
+            "Review each attendee's calendar and timezone. Try to find a 90-minute window "
             "that falls within everyone's working hours (9am–6pm local). "
+            "If a perfect overlap is impossible across all timezones, find the slot that "
+            "minimises out-of-hours impact (e.g. early morning for one attendee is better "
+            "than midnight). Clearly state any trade-offs in your invite messages. "
             "Issue a 'schedule' action. Then issue 'reply' actions to each attendee "
-            "with a personalized invite showing their local time."
+            "with a personalised invite showing their LOCAL time and any out-of-hours note."
         ),
         "context": {
             "today": "2025-07-14",

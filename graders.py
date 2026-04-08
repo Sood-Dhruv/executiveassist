@@ -302,12 +302,26 @@ def grade_draft_reply(task, action, step, history):
     else:
         notes.append("✗ Missing apology")
 
-    # Gives concrete date/next step
-    if any(w in body for w in ["july 17", "17th", "july 16", "16th", "delivery", "by "]):
+    # Gives concrete date/next step — flexible matching for any reasonable date/timeline expression
+    import re as _re
+    concrete_date_patterns = [
+        r"july\s*1[5-9]", r"jul\s*1[5-9]",           # july 15–19
+        r"17th|16th|18th|19th|15th",                   # ordinals
+        r"\bby\s+(end|eod|monday|tuesday|wednesday|thursday|friday|next)",
+        r"within\s+\d+\s+(day|hour|business)",         # within N days/hours
+        r"deliver(y|ed|ing)?\s+(by|on|before)",        # delivery by/on
+        r"(complete|ready|shipped|resolved)\s+(by|on|before)",
+        r"commit\s+to",                                 # commit to a date
+        r"\d{4}-\d{2}-\d{2}",                          # ISO date
+        r"(monday|tuesday|wednesday|thursday|friday)\s+(morning|afternoon|eod|by)",
+        r"next\s+(week|monday|business day)",
+    ]
+    has_concrete = any(_re.search(p, body) for p in concrete_date_patterns)
+    if has_concrete:
         score += criteria["gives_concrete_date"]
         notes.append("✓ Provides concrete next step / date")
     else:
-        notes.append("✗ No concrete timeline given")
+        notes.append("✗ No concrete timeline given (mention a specific date or commitment)")
 
     # Professional tone (no ALL CAPS rants, reasonable length)
     defensive_words = ["not our fault", "impossible", "you should have", "blame", "unfair"]
@@ -349,20 +363,25 @@ def grade_multi_party_schedule(task, action, step, history):
 
     attendees_ctx = task["context"]["attendees"]
 
-    # Check working hours for all attendees
-    all_in_hours = True
+    # Check working hours for all attendees — award partial credit for compromise slots
+    in_hours_count = 0
     for att in attendees_ctx:
         offset = att["utc_offset"]
         local_start = _add_hours_to_time(start_utc, offset)
         local_end   = _add_hours_to_time(end_utc, offset)
+        if _time_gte(local_start, "07:00") and _time_lte(local_end, "20:00"):
+            # Within extended reasonable range (7am–8pm local)
+            in_hours_count += 1
         if not (_time_gte(local_start, "09:00") and _time_lte(local_end, "18:00")):
-            all_in_hours = False
-            notes.append(f"✗ {att['name']} would be outside working hours (local: {local_start}–{local_end})")
-            break
+            notes.append(f"~ {att['name']}: local time {local_start}–{local_end} (outside strict 9-6)")
 
-    if all_in_hours:
+    hours_ratio = in_hours_count / len(attendees_ctx)
+    if hours_ratio == 1.0:
         score += criteria["slot_within_working_hours_all"]
-        notes.append("✓ Slot within working hours for all attendees")
+        notes.append("✓ Slot within working hours for ALL attendees")
+    elif hours_ratio >= 0.6:
+        score += criteria["slot_within_working_hours_all"] * hours_ratio
+        notes.append(f"~ Best-compromise slot: {in_hours_count}/{len(attendees_ctx)} attendees within reasonable hours")
 
     # Check 90-min duration
     if start_utc and end_utc:

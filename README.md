@@ -6,37 +6,37 @@ colorTo: purple
 sdk: docker
 app_port: 7860
 ---
-# ExecutiveAssist-Env
+# 🗂️ ExecutiveAssist-Env
 
-**An OpenEnv environment where an AI agent acts as a personal executive assistant.**
+**An OpenEnv RL environment where an AI agent acts as a personal executive assistant.**
 
-The agent handles real-world tasks that a human secretary or EA would manage daily: scheduling meetings, triaging emails, extracting action items from meeting notes, resolving calendar conflicts, and building optimized daily plans.
+Unlike game-based environments, every task here maps directly to a real workflow that an executive assistant handles daily — scheduling across time zones, triaging a cluttered inbox, extracting decisions from meeting transcripts, and building conflict-free daily plans under hard constraints.
 
 ---
 
-## Quick Start
+## ⚡ Quick Start
 
-### Run locally with Docker
+### Option A — Docker (recommended)
 ```bash
 docker build -t executiveassist-env .
 docker run -p 7860:7860 executiveassist-env
 ```
 
-### Run locally without Docker
+### Option B — Direct
 ```bash
 pip install -r requirements.txt
 python server.py
 ```
 
-### Test the environment
+### Smoke test
 ```bash
-# Reset to a task
-curl -X POST http://localhost:7860/reset \
+# 1. Reset to a task
+curl -s -X POST http://localhost:7860/reset \
   -H "Content-Type: application/json" \
-  -d '{"task_id": "schedule_meeting"}'
+  -d '{"task_id": "schedule_meeting", "seed": 42}' | python -m json.tool
 
-# Submit an action
-curl -X POST http://localhost:7860/step \
+# 2. Submit the correct action
+curl -s -X POST http://localhost:7860/step \
   -H "Content-Type: application/json" \
   -d '{
     "action": {
@@ -47,152 +47,165 @@ curl -X POST http://localhost:7860/step \
       "attendees": ["Alex Chen", "Jordan Lee", "Sam Rivera"],
       "title": "Q3 Planning Sync"
     }
-  }'
+  }' | python -m json.tool
+# → reward: 1.0, done: true
 ```
 
-### Run the baseline agent
+### Run baseline agent
 ```bash
 export OPENAI_API_KEY=sk-...
-python inference.py --all
+python inference.py --all                         # all 9 tasks
+python inference.py --task meeting_notes_extraction  # single task
 ```
 
 ---
 
-## Environment Overview
+## 🎯 Task Design
 
-### API
+Nine tasks across three difficulty tiers, each graded with a **partial-credit rubric**.
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/reset` | POST | Start a new episode. Body: `{"task_id": "...", "seed": 42}` |
-| `/step`  | POST | Submit one action. Body: `{"action": {...}}` |
-| `/state` | GET  | Get current state without advancing |
-| `/tasks` | GET  | List all task IDs by difficulty |
-| `/health`| GET  | Liveness check |
+### Easy
+| Task | What the agent must do | Key skill tested |
+|------|----------------------|-----------------|
+| `schedule_meeting` | Find the first free 1-hour slot across 3 calendars | Overlap detection |
+| `confirm_slot` | Choose the conflict-free option from 3 proposed times | Constraint checking |
+| `cancel_meeting` | Cancel an event + send a polite apology note (2 actions) | Multi-step sequencing |
 
-### State Object
+### Medium
+| Task | What the agent must do | Key skill tested |
+|------|----------------------|-----------------|
+| `inbox_triage` | Sort 8 emails into URGENT / IMPORTANT / DELEGATE / ARCHIVE | Priority reasoning |
+| `reschedule_conflict` | Identify a calendar clash, move the lower-priority meeting | Priority + rescheduling |
+| `draft_reply` | Write a professional, empathetic response to an angry client | Tone + NLP |
 
+### Hard
+| Task | What the agent must do | Key skill tested |
+|------|----------------------|-----------------|
+| `multi_party_schedule` | Best-compromise 90-min slot for 5 people across 4 time zones | Timezone arithmetic |
+| `meeting_notes_extraction` | Extract all action items (owner + date), decisions, open questions from a transcript | Comprehension + structured output |
+| `full_day_plan` | Build a no-overlap full-day plan from 4 meetings, 4 tasks, 3 urgent emails, and a travel requirement | Constraint satisfaction |
+
+---
+
+## 🔌 API Reference
+
+### `POST /reset`
+Start a new episode.
+```json
+{ "task_id": "inbox_triage", "seed": 42 }
+```
+Returns the initial state. `task_id` and `seed` are optional.
+
+### `POST /step`
+Submit one action.
+```json
+{ "action": { "type": "triage", "assignments": { "email-1": "URGENT", ... } } }
+```
+Returns:
 ```json
 {
-  "task_id": "schedule_meeting",
-  "task_description": "...",
-  "difficulty": "easy",
-  "context": { ... },
-  "instructions": "...",
-  "step": 1,
-  "done": false,
-  "reward": 0.9,
-  "total_reward": 0.9,
-  "feedback": "✓ Correct date...",
-  "history": [...]
+  "state":  { "task_id": "...", "context": {...}, "feedback": "...", "done": false, ... },
+  "reward": 0.80,
+  "done":   false,
+  "info":   { "step_count": 1, "max_steps": 10 }
 }
 ```
 
-### Step Response
-
-```json
-{
-  "state":  { ... },
-  "reward": 0.9,
-  "done":   true,
-  "info":   { "step_count": 1, "max_steps": 10, "task_id": "...", "difficulty": "easy" }
-}
-```
+### `GET /state` — current state (no side effects)
+### `GET /tasks` — list all task IDs by difficulty
+### `GET /health` — liveness check
 
 ---
 
-## Tasks
+## 🎮 Action Schema
 
-### Easy (3 tasks)
-
-| Task ID | Description |
-|---------|-------------|
-| `schedule_meeting` | Find the first mutually free 1-hour slot for 3 people |
-| `confirm_slot` | Pick the conflict-free option from 3 proposed slots |
-| `cancel_meeting` | Cancel a meeting + send apology email to attendees |
-
-### Medium (3 tasks)
-
-| Task ID | Description |
-|---------|-------------|
-| `inbox_triage` | Categorize 8 emails into URGENT / IMPORTANT / DELEGATE / ARCHIVE |
-| `reschedule_conflict` | Resolve a calendar conflict (move lower-priority meeting) |
-| `draft_reply` | Write a professional response to an angry client email |
-
-### Hard (3 tasks)
-
-| Task ID | Description |
-|---------|-------------|
-| `multi_party_schedule` | Schedule 90-min meeting across 5 people in 4 time zones |
-| `meeting_notes_extraction` | Extract action items, decisions, open questions from transcript |
-| `full_day_plan` | Build an optimized full-day schedule from chaos |
-
----
-
-## Action Types
-
-```json
-// Book a meeting
-{"type": "schedule", "date": "2025-07-15", "start_time": "15:00", "end_time": "16:00",
- "attendees": ["..."], "title": "Meeting Name"}
+```jsonc
+// Book or confirm a meeting
+{ "type": "schedule", "date": "2025-07-15", "start_time": "15:00", "end_time": "16:00",
+  "attendees": ["Alex Chen", "Jordan Lee"], "title": "Q3 Sync" }
 
 // Cancel an event
-{"type": "cancel", "event_id": "evt-002", "reason": "family emergency"}
+{ "type": "cancel", "event_id": "evt-002", "reason": "family emergency" }
 
-// Reschedule
-{"type": "reschedule", "event_id": "evt-B", "new_date": "2025-07-16",
- "new_start_time": "15:00", "new_end_time": "16:00"}
+// Move an event
+{ "type": "reschedule", "event_id": "evt-B",
+  "new_date": "2025-07-16", "new_start_time": "15:00", "new_end_time": "16:00" }
 
-// Send a reply
-{"type": "reply", "to": ["email@example.com"], "subject": "Re: ...", "body": "..."}
+// Send a reply / notification
+{ "type": "reply", "to": ["email@example.com"], "subject": "Re: ...", "body": "..." }
 
 // Triage inbox
-{"type": "triage", "assignments": {"email-1": "URGENT", "email-2": "ARCHIVE", ...}}
+{ "type": "triage",
+  "assignments": { "email-1": "URGENT", "email-2": "ARCHIVE", "email-3": "DELEGATE" } }
 
 // Extract from meeting notes
-{"type": "extract",
- "action_items": [{"task": "...", "owner": "...", "due_date": "2025-07-18"}],
- "decisions": ["..."],
- "open_questions": ["..."]}
+{ "type": "extract",
+  "action_items": [{ "task": "...", "owner": "Ren", "due_date": "2025-07-18" }],
+  "decisions": ["Ship mobile by July 28th"],
+  "open_questions": ["Web version timeline?"] }
 
 // Full day plan
-{"type": "plan", "schedule": [
-  {"start_time": "09:00", "end_time": "09:30", "type": "meeting", "title": "Standup"},
-  ...
-]}
+{ "type": "plan",
+  "schedule": [
+    { "start_time": "09:00", "end_time": "09:30", "type": "meeting", "title": "Standup" },
+    { "start_time": "09:30", "end_time": "11:30", "type": "task",    "title": "Write board deck" }
+  ]}
 ```
 
 ---
 
-## Grading
+## 📊 Grading
 
-All tasks use **partial-credit rubric grading** — agents earn partial rewards for partially correct answers.
+All tasks use **rubric-based partial credit**. An episode succeeds when reward ≥ 0.70.
 
-- Reward range: `[0.0, 1.0]`
-- Episode succeeds when reward ≥ `0.70`
-- Max steps per episode: `10`
+Example rubric for `meeting_notes_extraction`:
 
-Example rubric for `schedule_meeting`:
+| Criterion | Weight | What's checked |
+|-----------|--------|---------------|
+| Action items found | 30% | Keyword match against transcript |
+| Action items have owners | 15% | Each item has an `owner` field |
+| Action items have due dates | 15% | Each item has a `due_date` field |
+| Decisions found | 20% | Key decisions extracted |
+| Open questions found | 20% | Unresolved items flagged |
 
-| Criterion | Weight |
-|-----------|--------|
-| Correct action type | 0.10 |
-| Correct date | 0.30 |
-| Correct start time (±30 min) | 0.40 |
-| All attendees included | 0.20 |
+Example rubric for `draft_reply`:
+
+| Criterion | Weight | What's checked |
+|-----------|--------|---------------|
+| Acknowledges delay | 20% | Delay/late mentioned |
+| Contains apology | 25% | Sorry/apologize present |
+| Concrete next step | 25% | Date, timeline, or commitment given |
+| Professional tone | 20% | No defensive language |
+| No defensive language | 10% | Double-weighted safety check |
 
 ---
 
-## Design Philosophy
+## 🏗️ Architecture
 
-This environment is designed to test:
-1. **Calendar reasoning** — overlap detection, timezone arithmetic
-2. **Priority judgment** — what's truly urgent vs. noise
-3. **Natural language understanding** — reading transcripts, emails
-4. **Multi-step planning** — coordinating across constraints
-5. **Professional communication** — tone, empathy, conciseness
+```
+my_env.py      ← Core environment (reset / step / state API)
+tasks.py       ← All 9 task definitions with rich context data
+graders.py     ← Per-task rubric graders with partial credit
+server.py      ← FastAPI HTTP wrapper (OpenEnv-compliant)
+inference.py   ← GPT-4o baseline agent
+openenv.yaml   ← Environment metadata
+Dockerfile     ← Production container (Python 3.11-slim)
+```
 
-Unlike game environments, every task reflects situations that a real assistant faces daily.
+The environment is **fully deterministic** given the same seed — no randomness in grading.
+
+---
+
+## 💡 Design Rationale
+
+**Why an executive assistant?**
+- Every task is a real, verifiable workflow — not a game abstraction
+- Natural difficulty progression: slot-finding → priority judgement → constraint satisfaction
+- Graders are deterministic and explainable (rubric output is human-readable)
+- Hard tasks are genuinely hard: `multi_party_schedule` has timezone constraints that make a perfect solution impossible, rewarding agents that reason about trade-offs
+
+**Partial credit philosophy:**
+Agents that get the right *type* of action but wrong details score ~0.15–0.30. Agents that nail 60–70% of criteria score 0.60–0.75 and can iterate within the 10-step budget.
 
 ---
 

@@ -1,16 +1,8 @@
 """
 FastAPI server exposing the OpenEnv HTTP interface for ExecutiveAssist-Env.
-
-Endpoints:
-  POST /reset          → reset environment, returns initial state
-  POST /step           → submit an action, returns (state, reward, done, info)
-  GET  /state          → get current state
-  GET  /tasks          → list all available task IDs
-  GET  /health         → liveness check
 """
 
 import os
-import json
 import logging
 from typing import Any, Dict, Optional
 
@@ -37,7 +29,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Global env instance (stateful per-process; fine for evaluation)
+# Global env instance
 _env: Optional[ExecutiveAssistEnv] = None
 
 
@@ -49,7 +41,7 @@ def get_env() -> ExecutiveAssistEnv:
 
 
 # ──────────────────────────────────────────────
-# Request / Response Models
+# Request Models
 # ──────────────────────────────────────────────
 
 class ResetRequest(BaseModel):
@@ -75,9 +67,9 @@ def list_tasks():
     env = get_env()
     return {
         "tasks": {
-            "easy":   env.EASY_TASKS,
+            "easy": env.EASY_TASKS,
             "medium": env.MEDIUM_TASKS,
-            "hard":   env.HARD_TASKS,
+            "hard": env.HARD_TASKS,
         },
         "all": env.ALL_TASKS,
     }
@@ -85,17 +77,23 @@ def list_tasks():
 
 @app.post("/reset")
 def reset(req: ResetRequest = None):
-    """Reset the environment. Optionally specify task_id and seed."""
     global _env
-    _env = ExecutiveAssistEnv(
-        task_id=req.task_id if req else None,
-        seed=req.seed if req else 42,
-    )
+    task_id = req.task_id if req else None
+    seed = req.seed if req else 42
+
+    # Validate task_id
+    if task_id is not None:
+        from tasks import TASKS
+        if task_id not in TASKS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown task_id '{task_id}'. Valid options: {sorted(TASKS.keys())}"
+            )
+
+    _env = ExecutiveAssistEnv(task_id=task_id, seed=seed)
+
     try:
-        state = _env.reset(
-            task_id=req.task_id if req else None,
-            seed=req.seed if req else None,
-        )
+        state = _env.reset(task_id=task_id, seed=seed)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -105,51 +103,65 @@ def reset(req: ResetRequest = None):
 
 @app.post("/step")
 def step(req: StepRequest):
-    """Submit one action to the environment."""
     env = get_env()
+
     if env._current_task is None:
-        raise HTTPException(status_code=400, detail="No task loaded. Call /reset first.")
+        raise HTTPException(status_code=400, detail="Call /reset first.")
+
+    action = req.action
+
+    if not isinstance(action, dict):
+        raise HTTPException(status_code=422, detail="'action' must be a JSON object.")
+    if "type" not in action:
+        raise HTTPException(status_code=422, detail="Missing 'type' in action.")
+
+    # sanitize inputs
+    for key in action:
+        if action[key] is not None:
+            action[key] = str(action[key]).strip()
+
     try:
-        state, reward, done, info = env.step(req.action)
+        state, reward, done, info = env.step(action)
     except RuntimeError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("Unexpected error in step()")
+        raise HTTPException(status_code=500, detail=str(e))
 
-    logger.info(f"step({req.action.get('type')}) → reward={reward:.2f}, done={done}")
+    logger.info(f"step({action.get('type')}) → reward={reward:.2f}, done={done}")
+
     return {
-        "state":  state,
+        "state": state,
         "reward": reward,
-        "done":   done,
-        "info":   info,
+        "done": done,
+        "info": info,
     }
 
 
 @app.get("/state")
 def get_state():
-    """Return current state without advancing the environment."""
     env = get_env()
     if env._current_task is None:
-        raise HTTPException(status_code=400, detail="No task loaded. Call /reset first.")
+        raise HTTPException(status_code=400, detail="Call /reset first.")
     return env.state()
 
 
 @app.get("/render")
 def render():
-    """Return a human-readable rendering of the environment."""
     env = get_env()
     return {"render": env.render()}
 
 
 # ──────────────────────────────────────────────
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.environ.get("PORT", 7860))
-    uvicorn.run("server:app", host="0.0.0.0", port=port, reload=False)
-
+# ENTRY POINT (IMPORTANT FOR BOTH HF + VALIDATOR)
+# ──────────────────────────────────────────────
 
 import uvicorn
 
 def main():
-    uvicorn.run(app, host="0.0.0.0", port=7860)
+    port = int(os.environ.get("PORT", 7860))
+    uvicorn.run("server.app:app", host="0.0.0.0", port=port)
+
 
 if __name__ == "__main__":
     main()

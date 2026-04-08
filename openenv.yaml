@@ -10,13 +10,16 @@ domain: productivity
 type: text-based
 real_world: true
 
+ping_url: /reset
+health_url: /health
+
 tasks:
   - id: schedule_meeting
     difficulty: easy
     description: "Find the first mutually available 1-hour slot for a 3-person meeting"
   - id: confirm_slot
     difficulty: easy
-    description: "Pick the conflict-free slot from 3 proposed options"
+    description: "Pick the conflict-free option from 3 proposed slots"
   - id: cancel_meeting
     difficulty: easy
     description: "Cancel a meeting and send an apology note to attendees"
@@ -31,7 +34,7 @@ tasks:
     description: "Draft a professional empathetic reply to an angry client email"
   - id: multi_party_schedule
     difficulty: hard
-    description: "Find a 90-min meeting slot across 5 people in 4 different time zones"
+    description: "Find best-compromise 90-min slot across 5 people in 4 time zones"
   - id: meeting_notes_extraction
     difficulty: hard
     description: "Extract action items, decisions, and open questions from a meeting transcript"
@@ -44,25 +47,23 @@ interface:
     method: POST
     path: /reset
     body:
-      task_id: "optional string — task to load"
-      seed: "optional int — for reproducibility"
+      task_id: "optional string"
+      seed: "optional int"
     returns: "initial state dict"
-
   step:
     method: POST
     path: /step
     body:
-      action: "dict with at minimum {type: string}"
+      action: "dict with {type: string, ...}"
     returns:
-      state: "current environment state"
-      reward: "float in [0.0, 1.0]"
+      state: "environment state"
+      reward: "float [0.0, 1.0]"
       done: "boolean"
-      info: "dict with metadata"
-
+      info: "metadata dict"
   state:
     method: GET
     path: /state
-    returns: "current state without advancing"
+    returns: "current state"
 
 reward:
   range: [0.0, 1.0]
