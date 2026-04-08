@@ -1,6 +1,4 @@
-"""
-OpenEnv-compliant inference.py for ExecutiveAssist-Env
-"""
+
 
 import argparse
 import json
@@ -13,7 +11,7 @@ import httpx
 from openai import OpenAI
 
 # ──────────────────────────────────────────────
-# REQUIRED ENV VARIABLES
+# ENV VARIABLES
 # ──────────────────────────────────────────────
 
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:7860")
@@ -33,32 +31,31 @@ You must output EXACTLY one valid JSON object representing an action.
 
 Allowed actions:
 
-1. schedule:
+schedule:
 {"type": "schedule", "date": "YYYY-MM-DD", "start_time": "HH:MM", "end_time": "HH:MM", "attendees": [...], "title": "..."}
 
-2. cancel:
+cancel:
 {"type": "cancel", "event_id": "...", "reason": "..."}
 
-3. reschedule:
+reschedule:
 {"type": "reschedule", "event_id": "...", "new_date": "YYYY-MM-DD", "new_start_time": "HH:MM", "new_end_time": "HH:MM"}
 
-4. reply:
+reply:
 {"type": "reply", "to": [...], "subject": "...", "body": "..."}
 
-5. triage:
+triage:
 {"type": "triage", "assignments": {"email-id": "URGENT|IMPORTANT|DELEGATE|ARCHIVE"}}
 
-6. extract:
+extract:
 {"type": "extract", "action_items": [...], "decisions": [...], "open_questions": [...]}
 
-7. plan:
+plan:
 {"type": "plan", "schedule": [...]}
 
 Rules:
 - Output ONLY JSON
 - No explanation
 - No markdown
-- Choose the correct action type for the task
 - Use correct field names exactly
 """
 
@@ -94,17 +91,25 @@ class Agent:
 
     def act(self, state: Dict) -> Dict:
         try:
+            user_prompt = f"""
+Task: {state.get('task_description')}
+
+Instructions: {state.get('instructions')}
+
+Expected Action Format:
+{json.dumps(state.get('expected_actions', []), indent=2)}
+
+Context:
+{json.dumps(state.get('context', {}), indent=2)}
+
+Return ONLY valid JSON action.
+"""
+
             response = self.client.chat.completions.create(
                 model=MODEL_NAME,
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": f"""
-                        Task: {state.get('task_description')}
-                        Instructions: {state.get('instructions')}
-                        Context:
-                        {json.dumps(state.get('context', {}), indent=2)}
-                        Return ONLY valid JSON action.
-                    """}
+                    {"role": "user", "content": user_prompt}
                 ],
                 temperature=0.0,
                 max_tokens=500,
@@ -112,6 +117,7 @@ class Agent:
 
             raw = response.choices[0].message.content.strip()
 
+            # Clean markdown if present
             if raw.startswith("```"):
                 raw = raw.split("```")[1]
                 if raw.startswith("json"):
@@ -120,6 +126,7 @@ class Agent:
             return json.loads(raw.strip())
 
         except Exception:
+            # fallback action (safe)
             return {"type": "reply", "to": [], "subject": "fallback", "body": "error"}
 
 # ──────────────────────────────────────────────
@@ -191,7 +198,6 @@ def main():
     if args.task:
         run_task(env, agent, args.task)
     else:
-        # run default tasks
         for task in ["schedule_meeting", "inbox_triage", "meeting_notes_extraction"]:
             run_task(env, agent, task)
 
