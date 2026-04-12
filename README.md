@@ -54,7 +54,7 @@ curl -s -X POST http://localhost:7860/step \
 ### Run baseline agent
 ```bash
 export OPENAI_API_KEY=sk-...
-python inference.py --all                         # all 9 tasks
+python inference.py                                  # all 9 tasks
 python inference.py --task meeting_notes_extraction  # single task
 ```
 
