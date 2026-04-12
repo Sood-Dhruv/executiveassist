@@ -119,7 +119,7 @@ def step(req: StepRequest):
     # sanitize only strings, keep dicts/lists intact
     for key in action:
         if isinstance(action[key], str):
-            action[key] = action[key].strip()
+            action[key] = action[key].strip()   
 
     try:
         state, reward, done, info = env.step(action)
