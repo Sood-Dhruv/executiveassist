@@ -25,7 +25,7 @@ docker run -p 7860:7860 executiveassist-env
 ### Option B — Direct
 ```bash
 pip install -r requirements.txt
-python server.py
+uvicorn server.app:app --host 0.0.0.0 --port 7860
 ```
 
 ### Smoke test
