@@ -251,7 +251,7 @@ def run_task(env: EnvClient, agent: Agent, task_id: str):
             done   = result["done"]
             error  = "null"
         except Exception as e:
-            reward = 0.0
+            reward = 0.001
             done   = True
             error  = str(e)
 
