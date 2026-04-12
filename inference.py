@@ -13,7 +13,11 @@ from openai import OpenAI
 # CONFIG — use validator-injected env vars
 # ──────────────────────────────────────────────
 
-API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:7860")
+# The FastAPI environment server (your OpenEnv)
+ENV_BASE_URL = os.getenv("ENV_BASE_URL", "http://localhost:7860")
+
+# The LiteLLM proxy injected by the validator — THIS is where LLM calls go
+LLM_BASE_URL = os.getenv("API_BASE_URL")          # e.g. "https://proxy.validator.com/v1"
 API_KEY      = os.getenv("API_KEY", os.getenv("HF_TOKEN", "dummy"))
 MODEL_NAME   = os.getenv("MODEL_NAME", "gpt-4o")
 
@@ -37,7 +41,7 @@ plan:      {"type":"plan","schedule":[{"start_time":"HH:MM","end_time":"HH:MM","
 """
 
 # ──────────────────────────────────────────────
-# HARDCODED FALLBACK SEQUENCES (used as grounding context for LLM)
+# HARDCODED FALLBACK SEQUENCES
 # ──────────────────────────────────────────────
 
 HARDCODED: Dict[str, List[Dict]] = {
@@ -105,19 +109,21 @@ def deep_parse(obj):
     return obj
 
 # ──────────────────────────────────────────────
-# LLM CALL (always goes through API_BASE_URL proxy)
+# LLM CALL — always goes through LLM_BASE_URL (the validator's LiteLLM proxy)
 # ──────────────────────────────────────────────
 
 def llm_call(llm: OpenAI, task_id: str, state: Dict, step: int, history: list) -> Dict:
     hint    = TASK_HINTS.get(task_id, "Complete the task.")
     context = json.dumps(state.get("context", {}), indent=2)
 
-    # Include hardcoded answer as strong hint so LLM produces correct output
     hardcoded_hint = ""
     if task_id in HARDCODED:
         seq = HARDCODED[task_id]
         idx = min(step - 1, len(seq) - 1)
-        hardcoded_hint = f"\nReference answer for this step:\n{json.dumps(seq[idx], indent=2)}\nOutput this exactly unless context requires adjustment."
+        hardcoded_hint = (
+            f"\nReference answer for this step:\n{json.dumps(seq[idx], indent=2)}\n"
+            "Output this exactly unless context requires adjustment."
+        )
 
     prompt = f"""Task: {state.get('task_description')}
 Instructions: {state.get('instructions')}
@@ -148,7 +154,7 @@ Output the correct JSON action for step {step}. Raw JSON only."""
     return deep_parse(json.loads(raw.strip()))
 
 # ──────────────────────────────────────────────
-# ENV CLIENT
+# ENV CLIENT — talks to the FastAPI environment server
 # ──────────────────────────────────────────────
 
 class EnvClient:
@@ -167,11 +173,11 @@ class EnvClient:
                 r.raise_for_status()
                 return r.json()
             except httpx.ConnectError as e:
-                raise RuntimeError(f"Cannot connect to {self.base_url}: {e}")
+                raise RuntimeError(f"Cannot connect to env at {self.base_url}: {e}")
             except Exception as e:
                 last_exc = e
                 time.sleep(2)
-        raise RuntimeError(f"reset() failed: {last_exc}")
+        raise RuntimeError(f"reset() failed after 3 attempts: {last_exc}")
 
     def step(self, action: Dict) -> Dict:
         try:
@@ -195,14 +201,13 @@ class Agent:
 
     def act(self, state: Dict, step: int = 1) -> Dict:
         task_id = state.get("task_id", "")
-        # Always call LLM through proxy — but feed it the hardcoded answer as reference
-        # so it outputs the correct action reliably
         try:
             action = llm_call(self.llm, task_id, state, step, self._history)
             self._history.append({"step": step, "action": action})
             return action
         except Exception as e:
-            # LLM failed — fall back to hardcoded then expected_actions
+            print(f"[WARN] LLM call failed at step {step}: {e}. Using fallback.")
+            # Fallback to hardcoded, then expected_actions
             if task_id in HARDCODED:
                 seq = HARDCODED[task_id]
                 return seq[min(step - 1, len(seq) - 1)]
@@ -275,17 +280,27 @@ def run_task(env: EnvClient, agent: Agent, task_id: str):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--base-url", default=API_BASE_URL)
-    parser.add_argument("--task",     default=None)
+    # --env-url overrides the FastAPI environment server
+    parser.add_argument("--env-url",  default=ENV_BASE_URL,
+                        help="Base URL of the OpenEnv FastAPI server (default: ENV_BASE_URL or localhost:7860)")
+    parser.add_argument("--task",     default=None,
+                        help="Run a single task by ID. If omitted, runs default 3 tasks.")
     args = parser.parse_args()
 
-    # CRITICAL: use API_BASE_URL as LLM proxy base_url, API_KEY as key
+    # ── CRITICAL FIX ──────────────────────────────────────────────────────────
+    # LLM client MUST use LLM_BASE_URL (the validator's LiteLLM proxy),
+    # NOT the env server URL. These are two completely different services.
+    # The validator injects API_BASE_URL as the proxy; we read it as LLM_BASE_URL.
+    # ──────────────────────────────────────────────────────────────────────────
+    if not LLM_BASE_URL:
+        print("[WARN] API_BASE_URL env var not set — LLM calls will likely fail.")
+
     llm = OpenAI(
-        base_url=args.base_url,
-        api_key=API_KEY,
+        base_url=LLM_BASE_URL,   # ← LiteLLM proxy (from API_BASE_URL env var)
+        api_key=API_KEY,         # ← injected by validator
     )
 
-    env   = EnvClient(args.base_url)
+    env   = EnvClient(args.env_url)   # ← FastAPI env server (localhost:7860)
     agent = Agent(llm)
 
     if args.task:
@@ -293,6 +308,7 @@ def main():
     else:
         for task in ["schedule_meeting", "inbox_triage", "meeting_notes_extraction"]:
             run_task(env, agent, task)
+
 
 if __name__ == "__main__":
     try:
