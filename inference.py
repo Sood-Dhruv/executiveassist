@@ -226,8 +226,8 @@ def run_task(env: EnvClient, agent: Agent, task_id: str):
         state = env.reset(task_id)
     except Exception as e:
         print(f"[START] task={task_id} env=executiveassist model={MODEL_NAME}")
-        print(f"[STEP] step=1 action=none reward=0.00 done=true error={e}")
-        print(f"[END] success=false steps=1 score=0.00 rewards=0.00")
+        print(f"[STEP] step=1 action=none reward=0.001 done=true error={e}")
+        print(f"[END] success=false steps=1 score=0.001 rewards=0.001")
         return
 
     print(f"[START] task={task_id} env=executiveassist model={MODEL_NAME}")
@@ -260,7 +260,7 @@ def run_task(env: EnvClient, agent: Agent, task_id: str):
 
         print(
             f"[STEP] step={step} action={action.get('type')} "
-            f"reward={reward:.2f} done={str(done).lower()} error={error}"
+            f"reward={reward:.3f} done={str(done).lower()} error={error}"
         )
 
         if done:
@@ -271,7 +271,7 @@ def run_task(env: EnvClient, agent: Agent, task_id: str):
 
     print(
         f"[END] success={str(success).lower()} steps={steps_taken} "
-        f"score={score:.2f} rewards={','.join(f'{r:.2f}' for r in rewards)}"
+        f"score={score:.3f} rewards={','.join(f'{r:.3f}' for r in rewards)}"
     )
 
 # ──────────────────────────────────────────────

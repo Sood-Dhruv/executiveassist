@@ -129,7 +129,7 @@ def step(req: StepRequest):
         logger.exception("Unexpected error in step()")
         raise HTTPException(status_code=500, detail=str(e))
 
-    logger.info(f"step({action.get('type')}) → reward={reward:.2f}, done={done}")
+    logger.info(f"step({action.get('type')}) → reward={reward:.3f}, done={done}")
 
     return {
         "state": state,
