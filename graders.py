@@ -12,6 +12,7 @@ import re
 
 def _clamp(score: float) -> float:
     """Ensure score is strictly within (0, 1) as required by the validator."""
+    print(f"[CLAMP DEBUG] raw score = {score}")
     return max(0.001, min(0.999, round(score, 3)))
 
 
